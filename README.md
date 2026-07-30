@@ -45,8 +45,9 @@ brew install freerdp
 ### 方式二：自行构建
 
 ```bash
-git clone https://github.com/USER/mac-ubuntu-rdp.git
+git clone https://github.com/matingxiu/mac-ubuntu-rdp.git
 cd mac-ubuntu-rdp
+brew install freerdp dylibbundler  # 构建时需要，打包后不需要
 ./build.sh install
 ```
 
@@ -92,7 +93,10 @@ cd mac-ubuntu-rdp
       "width": 1920,
       "height": 1080,
       "window_mode": "smart",
-      "trusted_fingerprint": null
+      "trusted_fingerprint": null,
+      "auto_fit_screen": true,
+      "smart_sizing": true,
+      "swap_ctrl_cmd": true
     }
   ],
   "lastSelectedId": "UUID"
@@ -100,6 +104,13 @@ cd mac-ubuntu-rdp
 ```
 
 支持从旧版 `~/.config/ubuntu-rdp/config`（KEY=VALUE 格式）自动迁移。
+
+## 安全
+
+- **密码不在脚本中**：凭据通过临时 env 文件（0o600）传递，runner.sh 加载后立即删除
+- **密码不在进程列表**：FreeRDP 启动后自动用星号遮蔽 argv 中的密码
+- **TLS 指纹**：trust-on-first-use，首次连接记录证书指纹，后续校验防中间人
+- **配置文件权限**：runner.sh 0o600，仅 owner 可读写
 
 ## 构建
 

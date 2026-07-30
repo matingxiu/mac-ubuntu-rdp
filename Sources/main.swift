@@ -100,12 +100,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Logger.shared.info("退出应用")
+        ConnectionManager.shared.terminateCurrentProcess()
+        Logger.shared.close()
     }
 
     private func showFreeRDPMissingAlert() {
         let a = NSAlert()
         a.messageText = "未检测到 FreeRDP"
-        a.informativeText = "请先安装 FreeRDP：\n\nbrew install freerdp\n\n否则无法建立 RDP 连接。"
+        a.informativeText = "DMG 安装包应已内置 FreeRDP，如缺失请重新下载安装。\n\n自行构建时需运行：\nbrew install freerdp"
         a.alertStyle = .warning
         a.addButton(withTitle: "我知道了")
         a.runModal()

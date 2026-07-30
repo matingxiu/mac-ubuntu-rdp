@@ -78,4 +78,13 @@ final class Logger {
             openHandle()
         }
     }
+
+    /// 关闭日志文件句柄（App 退出时调用）
+    func close() {
+        queue.sync {
+            try? fileHandle?.synchronize()
+            try? fileHandle?.close()
+            fileHandle = nil
+        }
+    }
 }

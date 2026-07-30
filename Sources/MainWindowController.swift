@@ -169,6 +169,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate,
         detailVC.onConnect = { [weak self] s in self?.connect(to: s) }
         detailVC.onTest = { [weak self] s in self?.testConnection(to: s) }
         detailVC.onEdit = { [weak self] s in self?.editServer(s) }
+
+        // FreeRDP 退出时更新状态栏
+        ConnectionManager.shared.onProcessExit = { [weak self] in
+            self?.updateStatus()
+        }
     }
 
     // MARK: - 数据

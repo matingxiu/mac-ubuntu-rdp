@@ -27,19 +27,25 @@ final class ConnectionManager {
     // 统一日志/脚本路径到 ~/Library/Logs/ubuntu-rdp/
     private let runnerPath: String
     private let freerdpLogPath: String
+    private let envFilePath: String
     private var currentProcess: Process?
+
+    /// FreeRDP 退出时的回调（主线程）
+    var onProcessExit: (() -> Void)?
 
     private init() {
         let dir = Logger.logDirectory
         runnerPath = dir.appendingPathComponent("runner.sh").path
         freerdpLogPath = dir.appendingPathComponent("freerdp.log").path
+        envFilePath = dir.appendingPathComponent(".rdp_env").path
     }
 
     var freerdpLogURL: URL { URL(fileURLWithPath: freerdpLogPath) }
     var runnerURL: URL { URL(fileURLWithPath: runnerPath) }
 
-    /// FreeRDP 可执行文件路径：优先用 .app 内置的，找不到再回退到 brew
-    var freerdpPath: String {
+    // MARK: - 缓存的 FreeRDP 路径（避免每次调用都查文件系统）
+
+    private static let cachedFreerdpPath: String = {
         // 1. 优先查找 .app/Contents/MacOS/ 内置的 sdl-freerdp
         if let execURL = Bundle.main.executableURL {
             let bundled = execURL.deletingLastPathComponent()
@@ -59,7 +65,9 @@ final class ConnectionManager {
             return p
         }
         return "/opt/homebrew/bin/sdl-freerdp"
-    }
+    }()
+
+    var freerdpPath: String { Self.cachedFreerdpPath }
 
     /// FreeRDP 是否已安装（内置或 brew）
     var freerdpInstalled: Bool {
@@ -71,8 +79,8 @@ final class ConnectionManager {
         freerdpPath.contains(Bundle.main.bundlePath)
     }
 
-    /// OpenSSL 模块目录路径（内置时指向 Frameworks/ossl-modules）
-    var opensslModulesPath: String {
+    /// OpenSSL 模块目录路径（仅内置模式时有效）
+    private var opensslModulesPath: String {
         URL(fileURLWithPath: freerdpPath)
             .deletingLastPathComponent()      // MacOS/
             .deletingLastPathComponent()      // Contents/
@@ -109,14 +117,19 @@ final class ConnectionManager {
         let script = buildRunnerScript(for: server)
         do {
             try script.write(toFile: runnerPath, atomically: true, encoding: .utf8)
-            chmod(runnerPath, 0o755)
+            // 0o600：仅 owner 可读写执行
+            chmod(runnerPath, 0o600)
+            // 凭据写入单独的 env 文件（0o600），runner.sh 通过 source 加载后自删
+            // 这样密码既不在 runner.sh 也不在 ps 命令行参数中
+            let envContent = "RDP_USER='\(server.user)'\nRDP_PASS='\(server.password)'\n"
+            try envContent.write(toFile: envFilePath, atomically: true, encoding: .utf8)
+            chmod(envFilePath, 0o600)
         } catch {
             return .failure(.scriptWriteFailed(error.localizedDescription))
         }
 
-        // 用 bash -l 启动（登录 shell，解决 winpr dylib 加载）
         let process = Process()
-        process.launchPath = "/bin/bash"
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-l", runnerPath]
         process.qualityOfService = .userInteractive
 
@@ -127,6 +140,15 @@ final class ConnectionManager {
             process.standardError = fh
         }
 
+        // FreeRDP 退出时通知 UI 更新状态
+        process.terminationHandler = { [weak self] proc in
+            Logger.shared.info("FreeRDP 进程退出，PID=\(proc.processIdentifier)")
+            DispatchQueue.main.async {
+                self?.currentProcess = nil
+                self?.onProcessExit?()
+            }
+        }
+
         do {
             try process.run()
             currentProcess = process
@@ -135,6 +157,15 @@ final class ConnectionManager {
         } catch {
             return .failure(.launchFailed(error.localizedDescription))
         }
+    }
+
+    /// 终止当前 FreeRDP 进程（App 退出时调用）
+    func terminateCurrentProcess() {
+        if let p = currentProcess, p.isRunning {
+            Logger.shared.info("终止 FreeRDP 进程 PID=\(p.processIdentifier)")
+            p.terminate()
+        }
+        currentProcess = nil
     }
 
     // MARK: - ⌃⌘ 键位交换
@@ -149,7 +180,7 @@ final class ConnectionManager {
                         completion: @escaping (Result<Void, ConnectionError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
-            process.launchPath = "/bin/bash"
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
             process.arguments = ["-c", "nc -z -w 3 \(server.shellSafeHost) \(server.port) 2>&1 && echo OK || echo FAIL"]
             let pipe = Pipe()
             process.standardOutput = pipe
@@ -202,17 +233,25 @@ final class ConnectionManager {
         // 自动适配屏幕：取 Mac 主屏逻辑分辨率作为远程桌面尺寸，避免越界
         let (w, h) = effectiveResolution(for: s)
 
+        // OpenSSL 模块路径：仅内置 FreeRDP 时设置（brew 模式由 brew 自带）
+        let opensslLine = isFreeRDPBundled
+            ? "export OPENSSL_MODULES=\"\(opensslModulesPath)\""
+            : "# OPENSSL_MODULES: brew 模式无需设置"
+
         return """
 #!/bin/bash
 # 由 Ubuntu RDP 客户端自动生成
 # 服务器：\(s.name) @ \(s.address)
 # ⌃⌘交换：\(s.swapCtrlCmd ? "开（RDP 协议层）" : "关")
 # 分辨率：\(w)x\(h)\(s.autoFitScreen ? "（自动适配屏幕）" : "（固定）")
-export OPENSSL_MODULES="\(opensslModulesPath)"
+# 凭据从 .rdp_env 加载（0o600），加载后立即删除，不出现在本脚本中
+\(opensslLine)
+source "\(envFilePath)"
+rm -f "\(envFilePath)"
 exec "\(freerdpPath)" \\
     /v:\(s.host):\(s.port) \\
-    /u:"\(s.user)" \\
-    /p:"\(s.password)" \\
+    /u:"${RDP_USER}" \\
+    /p:"${RDP_PASS}" \\
     /sec:nla \\
     -gfx -rfx -nsc -jpeg \\
     /bpp:24 \\
