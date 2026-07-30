@@ -46,13 +46,11 @@ final class ConnectionManager {
     // MARK: - 缓存的 FreeRDP 路径（避免每次调用都查文件系统）
 
     private static let cachedFreerdpPath: String = {
-        // 1. 优先查找 .app/Contents/MacOS/ 内置的 sdl-freerdp
-        if let execURL = Bundle.main.executableURL {
-            let bundled = execURL.deletingLastPathComponent()
-                .appendingPathComponent("sdl-freerdp").path
-            if FileManager.default.isExecutableFile(atPath: bundled) {
-                return bundled
-            }
+        // 1. 优先查找 .app 内置的 FreeRDP.app 包装器（LSUIElement=true，无 Dock 图标）
+        let wrapperPath = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Resources/FreeRDP.app/Contents/MacOS/sdl-freerdp").path
+        if FileManager.default.isExecutableFile(atPath: wrapperPath) {
+            return wrapperPath
         }
         // 2. 回退到 brew 安装的
         let candidates = [
@@ -246,7 +244,7 @@ final class ConnectionManager {
 # 分辨率：\(w)x\(h)\(s.autoFitScreen ? "（自动适配屏幕）" : "（固定）")
 # 凭据从 .rdp_env 加载（0o600），加载后立即删除，不出现在本脚本中
 \(opensslLine)
-# SDL 后台模式：FreeRDP 窗口不单独占据 Dock 图标，作为主程序的子窗口呈现
+# SDL 后台模式：阻止 SDL3 Cocoa 驱动将激活策略覆盖为 regular（配合 LSUIElement 使用）
 export SDL_MAC_BACKGROUND_APP=1
 source "\(envFilePath)"
 rm -f "\(envFilePath)"
