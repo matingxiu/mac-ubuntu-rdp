@@ -246,6 +246,8 @@ final class ConnectionManager {
 # 分辨率：\(w)x\(h)\(s.autoFitScreen ? "（自动适配屏幕）" : "（固定）")
 # 凭据从 .rdp_env 加载（0o600），加载后立即删除，不出现在本脚本中
 \(opensslLine)
+# SDL 后台模式：FreeRDP 窗口不单独占据 Dock 图标，作为主程序的子窗口呈现
+export SDL_MAC_BACKGROUND_APP=1
 source "\(envFilePath)"
 rm -f "\(envFilePath)"
 exec "\(freerdpPath)" \\
