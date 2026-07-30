@@ -91,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
+        // 窗口菜单（含活跃连接列表，动态更新）
+        let winItem = NSMenuItem()
+        let winMenu = NSMenu(title: "窗口")
+        winMenu.addItem(withTitle: "最小化",
+                        action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winMenu.addItem(withTitle: "缩放",
+                        action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        winMenu.addItem(NSMenuItem.separator())
+        winItem.submenu = winMenu
+        mainMenu.addItem(winItem)
+
         NSApp.mainMenu = mainMenu
     }
 
@@ -100,8 +111,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Logger.shared.info("退出应用")
-        ConnectionManager.shared.terminateCurrentProcess()
+        ConnectionManager.shared.terminateAll()
         Logger.shared.close()
+    }
+
+    // MARK: - Dock 菜单（右击 Dock 图标显示活跃连接，可切换窗口）
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let servers = ConnectionManager.shared.activeServers
+        if servers.isEmpty {
+            menu.addItem(withTitle: "无活跃连接", action: nil, keyEquivalent: "")
+        } else {
+            menu.addItem(withTitle: "活跃连接", action: nil, keyEquivalent: "")
+            for s in servers {
+                let item = menu.addItem(withTitle: s.name,
+                                        action: #selector(dockMenuItemClicked(_:)),
+                                        keyEquivalent: "")
+                item.target = self
+                item.representedObject = s.id
+                item.state = .on  // 标记为已连接
+            }
+        }
+        return menu
+    }
+
+    @objc private func dockMenuItemClicked(_ sender: NSMenuItem) {
+        guard let serverId = sender.representedObject as? String else { return }
+        ConnectionManager.shared.activateWindow(serverId: serverId)
     }
 
     private func showFreeRDPMissingAlert() {

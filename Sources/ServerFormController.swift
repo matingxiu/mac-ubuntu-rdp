@@ -57,7 +57,7 @@ final class ServerFormController: NSWindowController, NSTextFieldDelegate {
         let modeLabel = NSTextField(labelWithString: "窗口模式")
         modeLabel.font = .systemFont(ofSize: 11, weight: .medium)
         let modePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        for opt in ["smart (可调整大小)", "fullscreen (全屏)", "both (全屏+可调整)", "fixed (固定大小)"] {
+        for opt in ["smart (可调整大小)", "fixed (固定大小)"] {
             modePopup.addItem(withTitle: opt)
         }
         let modeRow = NSStackView(views: [modeLabel, modePopup])
@@ -159,7 +159,7 @@ final class ServerFormController: NSWindowController, NSTextFieldDelegate {
         (fields["password"] as? NSSecureTextField)?.stringValue = s.password
         (fields["width"] as? NSTextField)?.stringValue = String(s.width)
         (fields["height"] as? NSTextField)?.stringValue = String(s.height)
-        let modes = ["smart", "fullscreen", "both", "fixed"]
+        let modes = ["smart", "fixed"]
         (fields["windowMode"] as? NSPopUpButton)?.selectItem(at: modes.firstIndex(of: s.windowMode) ?? 0)
         (fields["autoFitScreen"] as? NSButton)?.state = s.autoFitScreen ? .on : .off
         (fields["smartSizing"] as? NSButton)?.state = s.smartSizing ? .on : .off
@@ -182,7 +182,7 @@ final class ServerFormController: NSWindowController, NSTextFieldDelegate {
         let pass = (fields["password"] as? NSSecureTextField)?.stringValue ?? ""
         let width = Int((fields["width"] as? NSTextField)?.stringValue ?? "") ?? 1920
         let height = Int((fields["height"] as? NSTextField)?.stringValue ?? "") ?? 1080
-        let modes = ["smart", "fullscreen", "both", "fixed"]
+        let modes = ["smart", "fixed"]
         let modeIdx = (fields["windowMode"] as? NSPopUpButton)?.indexOfSelectedItem ?? 0
         let mode = modes[modeIdx]
         let autoFit = (fields["autoFitScreen"] as? NSButton)?.state == .on

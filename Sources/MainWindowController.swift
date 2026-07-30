@@ -170,9 +170,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate,
         detailVC.onTest = { [weak self] s in self?.testConnection(to: s) }
         detailVC.onEdit = { [weak self] s in self?.editServer(s) }
 
-        // FreeRDP 退出时更新状态栏
-        ConnectionManager.shared.onProcessExit = { [weak self] in
+        // 活跃连接变化时更新状态栏和窗口菜单
+        ConnectionManager.shared.onConnectionsChanged = { [weak self] in
             self?.updateStatus()
+            self?.updateWindowMenu()
         }
     }
 
@@ -201,7 +202,44 @@ final class MainWindowController: NSWindowController, NSWindowDelegate,
     }
 
     private func updateStatus() {
-        statusLabel.stringValue = "共 \(servers.count) 个服务器"
+        let active = ConnectionManager.shared.activeServers
+        if active.isEmpty {
+            statusLabel.stringValue = "共 \(servers.count) 个服务器"
+        } else {
+            let names = active.map { $0.name }.joined(separator: "、")
+            statusLabel.stringValue = "活跃连接 (\(active.count))：\(names)"
+        }
+    }
+
+    /// 更新菜单栏「窗口」菜单，显示活跃连接
+    func updateWindowMenu() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        // 找到「窗口」菜单
+        guard let winItem = mainMenu.items.first(where: { $0.submenu?.title == "窗口" }),
+              let winMenu = winItem.submenu else { return }
+
+        // 清除旧的连接项（保留标准项在前）
+        let stdCount = 3  // 最小化、缩放、分隔线
+        while winMenu.items.count > stdCount {
+            winMenu.removeItem(at: winMenu.items.count - 1)
+        }
+
+        let active = ConnectionManager.shared.activeServers
+        if active.isEmpty { return }
+
+        for s in active {
+            let item = winMenu.addItem(withTitle: s.name,
+                                       action: #selector(windowMenuItemClicked(_:)),
+                                       keyEquivalent: "")
+            item.target = self
+            item.representedObject = s.id
+            item.state = .on
+        }
+    }
+
+    @objc private func windowMenuItemClicked(_ sender: NSMenuItem) {
+        guard let serverId = sender.representedObject as? String else { return }
+        ConnectionManager.shared.activateWindow(serverId: serverId)
     }
 
     // MARK: - 连接

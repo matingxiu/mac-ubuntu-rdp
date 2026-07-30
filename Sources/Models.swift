@@ -10,7 +10,7 @@ struct Server: Codable, Equatable {
     var password: String
     var width: Int
     var height: Int
-    var windowMode: String          // smart / fullscreen / both / fixed
+    var windowMode: String          // smart / fixed（旧 fullscreen/both 自动按 smart 处理）
     var trustedFingerprint: String?  // TLS 证书指纹（trust-on-first-use）
     /// 自动适配 Mac 屏幕逻辑分辨率：启动时自动取 Mac 主屏幕的 1x 逻辑分辨率，
     /// 避免 RDP 分辨率大于可用屏幕区域导致窗口越界、自动最大化、切换 Space
@@ -69,7 +69,9 @@ struct Server: Codable, Equatable {
         password = try c.decode(String.self, forKey: .password)
         width = try c.decode(Int.self, forKey: .width)
         height = try c.decode(Int.self, forKey: .height)
-        windowMode = try c.decode(String.self, forKey: .windowMode)
+        let rawMode = try c.decode(String.self, forKey: .windowMode)
+        // 旧配置 fullscreen/both 已废弃（SDL3 macOS 全屏黑屏关不了），自动按 smart 处理
+        windowMode = (rawMode == "fullscreen" || rawMode == "both") ? "smart" : rawMode
         trustedFingerprint = try c.decodeIfPresent(String.self, forKey: .trustedFingerprint)
         autoFitScreen = try c.decodeIfPresent(Bool.self, forKey: .autoFitScreen) ?? true
         smartSizing = try c.decodeIfPresent(Bool.self, forKey: .smartSizing) ?? true
@@ -89,8 +91,6 @@ struct Server: Codable, Equatable {
     var windowModeDescription: String {
         switch windowMode {
         case "smart": return "smart (可调整大小)"
-        case "fullscreen": return "fullscreen (全屏)"
-        case "both": return "both (全屏+可调整)"
         case "fixed": return "fixed (固定大小)"
         default: return windowMode
         }

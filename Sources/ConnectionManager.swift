@@ -20,42 +20,39 @@ enum ConnectionError: LocalizedError {
     }
 }
 
-/// FreeRDP 连接管理器
+/// 活跃连接信息
+struct ActiveConnection {
+    let server: Server
+    let process: Process
+    let logPath: String
+}
+
+/// FreeRDP 连接管理器（支持多连接并行）
 final class ConnectionManager {
     static let shared = ConnectionManager()
 
-    // 统一日志/脚本路径到 ~/Library/Logs/ubuntu-rdp/
-    private let runnerPath: String
-    private let freerdpLogPath: String
-    private let envFilePath: String
-    private var currentProcess: Process?
+    private let baseDir: URL
+    /// 活跃连接：serverId → 连接信息
+    private(set) var activeConnections: [String: ActiveConnection] = [:]
 
-    /// FreeRDP 退出时的回调（主线程）
-    var onProcessExit: (() -> Void)?
+    /// 活跃连接变化时的回调（主线程）
+    var onConnectionsChanged: (() -> Void)?
 
     private init() {
-        let dir = Logger.logDirectory
-        runnerPath = dir.appendingPathComponent("runner.sh").path
-        freerdpLogPath = dir.appendingPathComponent("freerdp.log").path
-        envFilePath = dir.appendingPathComponent(".rdp_env").path
+        baseDir = Logger.logDirectory
     }
 
-    var freerdpLogURL: URL { URL(fileURLWithPath: freerdpLogPath) }
-    var runnerURL: URL { URL(fileURLWithPath: runnerPath) }
-
-    // MARK: - 缓存的 FreeRDP 路径（避免每次调用都查文件系统）
+    // MARK: - 缓存的 FreeRDP 路径
 
     private static let cachedFreerdpPath: String = {
-        // 1. 优先查找 .app 内置的 FreeRDP.app 包装器（LSUIElement=true，无 Dock 图标）
         let wrapperPath = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Resources/FreeRDP.app/Contents/MacOS/sdl-freerdp").path
         if FileManager.default.isExecutableFile(atPath: wrapperPath) {
             return wrapperPath
         }
-        // 2. 回退到 brew 安装的
         let candidates = [
-            "/opt/homebrew/bin/sdl-freerdp",   // Apple Silicon
-            "/usr/local/bin/sdl-freerdp",       // Intel
+            "/opt/homebrew/bin/sdl-freerdp",
+            "/usr/local/bin/sdl-freerdp",
             "/opt/homebrew/bin/xfreerdp",
             "/usr/local/bin/xfreerdp"
         ]
@@ -67,29 +64,38 @@ final class ConnectionManager {
 
     var freerdpPath: String { Self.cachedFreerdpPath }
 
-    /// FreeRDP 是否已安装（内置或 brew）
     var freerdpInstalled: Bool {
         FileManager.default.isExecutableFile(atPath: freerdpPath)
     }
 
-    /// FreeRDP 是否为内置（非 brew）
     var isFreeRDPBundled: Bool {
         freerdpPath.contains(Bundle.main.bundlePath)
     }
 
-    /// OpenSSL 模块目录路径（仅内置模式时有效）
     private var opensslModulesPath: String {
         URL(fileURLWithPath: freerdpPath)
-            .deletingLastPathComponent()      // MacOS/
-            .deletingLastPathComponent()      // Contents/
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent("Frameworks")
             .appendingPathComponent("ossl-modules")
             .path
     }
 
+    // MARK: - 多连接管理
+
+    /// 当前活跃的服务器列表（用于 Dock 菜单和窗口菜单）
+    var activeServers: [Server] {
+        activeConnections.values.map { $0.server }.sorted { $0.name < $1.name }
+    }
+
+    /// 指定服务器是否已连接
+    func isConnected(_ serverId: String) -> Bool {
+        activeConnections[serverId]?.process.isRunning ?? false
+    }
+
     // MARK: - 连接
 
-    /// 启动 RDP 连接
+    /// 启动 RDP 连接（支持同时打开多个）
     @discardableResult
     func connect(to server: Server) -> Result<Void, ConnectionError> {
         Logger.shared.info("开始连接：\(server.name) @ \(server.address)")
@@ -104,24 +110,26 @@ final class ConnectionManager {
             return .failure(.launchFailed("FreeRDP 未安装，请运行：brew install freerdp"))
         }
 
-        // 防止并发启动多个 FreeRDP：若旧进程仍在运行，先终止
-        if let p = currentProcess, p.isRunning {
-            Logger.shared.info("终止旧 FreeRDP 进程 PID=\(p.processIdentifier)，准备重连")
-            p.terminate()
-            p.waitUntilExit()
-            currentProcess = nil
+        // 如果该服务器已连接，直接激活窗口
+        let serverId = server.id.uuidString
+        if let existing = activeConnections[serverId], existing.process.isRunning {
+            Logger.shared.info("\(server.name) 已连接，激活窗口")
+            activateWindow(serverId: serverId)
+            return .success(())
         }
 
-        let script = buildRunnerScript(for: server)
+        // 每个连接使用独立的脚本/env/日志文件（以 serverId 区分）
+        let runnerPath = baseDir.appendingPathComponent("runner_\(serverId).sh").path
+        let envPath = baseDir.appendingPathComponent(".rdp_env_\(serverId)").path
+        let logPath = baseDir.appendingPathComponent("freerdp_\(serverId).log").path
+
+        let script = buildRunnerScript(for: server, runnerPath: runnerPath, envPath: envPath)
         do {
             try script.write(toFile: runnerPath, atomically: true, encoding: .utf8)
-            // 0o600：仅 owner 可读写执行
             chmod(runnerPath, 0o600)
-            // 凭据写入单独的 env 文件（0o600），runner.sh 通过 source 加载后自删
-            // 这样密码既不在 runner.sh 也不在 ps 命令行参数中
             let envContent = "RDP_USER='\(server.user)'\nRDP_PASS='\(server.password)'\n"
-            try envContent.write(toFile: envFilePath, atomically: true, encoding: .utf8)
-            chmod(envFilePath, 0o600)
+            try envContent.write(toFile: envPath, atomically: true, encoding: .utf8)
+            chmod(envPath, 0o600)
         } catch {
             return .failure(.scriptWriteFailed(error.localizedDescription))
         }
@@ -131,49 +139,121 @@ final class ConnectionManager {
         process.arguments = ["-l", runnerPath]
         process.qualityOfService = .userInteractive
 
-        // 重定向输出到日志文件
-        FileManager.default.createFile(atPath: freerdpLogPath, contents: nil)
-        if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: freerdpLogPath)) {
+        FileManager.default.createFile(atPath: logPath, contents: nil)
+        if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: logPath)) {
             process.standardOutput = fh
             process.standardError = fh
         }
 
-        // FreeRDP 退出时通知 UI 更新状态
+        let serverName = server.name
         process.terminationHandler = { [weak self] proc in
-            Logger.shared.info("FreeRDP 进程退出，PID=\(proc.processIdentifier)")
+            Logger.shared.info("FreeRDP 进程退出：\(serverName)，PID=\(proc.processIdentifier)")
             DispatchQueue.main.async {
-                self?.currentProcess = nil
-                self?.onProcessExit?()
+                self?.activeConnections.removeValue(forKey: serverId)
+                self?.onConnectionsChanged?()
             }
         }
 
         do {
             try process.run()
-            currentProcess = process
-            Logger.shared.info("FreeRDP 已启动，PID=\(process.processIdentifier)，⌃⌘交换=\(server.swapCtrlCmd ? "开" : "关")")
+            activeConnections[serverId] = ActiveConnection(server: server, process: process, logPath: logPath)
+            onConnectionsChanged?()
+            Logger.shared.info("FreeRDP 已启动：\(server.name)，PID=\(process.processIdentifier)，⌃⌘交换=\(server.swapCtrlCmd ? "开" : "关")")
+
+            // SDL 客户端固有行为：连接前创建占位窗口（~0.1s）、连接建立后重建会话窗口（~1.1s），
+            // 两个窗口初始都是黑色，造成“先闪黑窗口再出正常窗口”（已验证与参数无关）。
+            // 解决：0.12s~2.04s 内每 120ms 重复 hide，确保两个窗口一出现就被立即隐藏；
+            // 3s 后连接已建立、首帧已渲染，再 unhide 显示有内容的窗口。
+            let pid = process.processIdentifier
+            for i in 1...17 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) { [weak self] in
+                    guard let self = self,
+                          let conn = self.activeConnections[serverId], conn.process.isRunning else { return }
+                    if let app = NSRunningApplication(processIdentifier: pid) {
+                        app.hide()
+                    }
+                }
+            }
+            Logger.shared.info("已开始隐藏 FreeRDP 窗口（轮询，等待连接建立）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self = self,
+                      let conn = self.activeConnections[serverId], conn.process.isRunning else { return }
+                if let app = NSRunningApplication(processIdentifier: pid) {
+                    app.unhide()
+                    app.activate(options: [.activateAllWindows])
+                    Logger.shared.info("已显示 FreeRDP 窗口（连接就绪）")
+                }
+            }
+
             return .success(())
         } catch {
             return .failure(.launchFailed(error.localizedDescription))
         }
     }
 
-    /// 终止当前 FreeRDP 进程（App 退出时调用）
-    func terminateCurrentProcess() {
-        if let p = currentProcess, p.isRunning {
-            Logger.shared.info("终止 FreeRDP 进程 PID=\(p.processIdentifier)")
-            p.terminate()
+    /// 断开指定连接
+    func disconnect(serverId: String) {
+        guard let conn = activeConnections[serverId], conn.process.isRunning else { return }
+        Logger.shared.info("断开连接：\(conn.server.name)")
+        conn.process.terminate()
+    }
+
+    /// 终止所有 FreeRDP 进程（App 退出时调用）
+    func terminateAll() {
+        for (id, conn) in activeConnections {
+            if conn.process.isRunning {
+                Logger.shared.info("终止 FreeRDP：\(conn.server.name)，PID=\(conn.process.processIdentifier)")
+                conn.process.terminate()
+            }
+            activeConnections.removeValue(forKey: id)
         }
-        currentProcess = nil
+    }
+
+    /// 激活指定连接的 FreeRDP 窗口（带到前台）
+    func activateWindow(serverId: String) {
+        guard let conn = activeConnections[serverId], conn.process.isRunning else { return }
+        let pid = conn.process.processIdentifier
+        // 用 NSRunningApplication 激活后台进程
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [.activateAllWindows])
+        }
+        // 双保险：用 AppleScript 强制设为前台
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", "tell application \"System Events\" to set frontmost of (first process whose unix id is \(pid)) to true"]
+            try? task.run()
+            task.waitUntilExit()
+        }
+    }
+
+    /// 读取指定连接的 FreeRDP 日志（无参数时取最后一个）
+    func readFreeRDPLog(serverId: String? = nil) -> String {
+        let path: String
+        if let sid = serverId, let conn = activeConnections[sid] {
+            path = conn.logPath
+        } else if let last = Array(activeConnections.values.suffix(1)).first {
+            path = last.logPath
+        } else {
+            return ""
+        }
+        return (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    }
+
+    /// 最近一次连接的日志 URL（兼容旧接口）
+    var freerdpLogURL: URL {
+        if let last = Array(activeConnections.values.suffix(1)).first {
+            return URL(fileURLWithPath: last.logPath)
+        }
+        return baseDir.appendingPathComponent("freerdp.log")
     }
 
     // MARK: - ⌃⌘ 键位交换
 
-    /// 构建 FreeRDP /kbd:remap 参数（RDP 协议层重映射，仅影响远程桌面，不碰 macOS 系统）
-    /// 交换 Left Ctrl↔Win(Cmd)、Right Ctrl↔Win（用十进制，FreeRDP hex 解析对部分扩展扫描码有 bug）：
-    ///   LCtrl(29)↔LWin(347)  RCtrl(285)↔RWin(348)
     private static let kbdRemapArg = "/kbd:remap:29=347,remap:347=29,remap:285=348,remap:348=285"
 
-    /// 测试连接（仅检查端口可达性，约 3 秒）
+    // MARK: - 测试连接
+
     func testConnection(to server: Server,
                         completion: @escaping (Result<Void, ConnectionError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -201,23 +281,20 @@ final class ConnectionManager {
         }
     }
 
-    /// 读取 FreeRDP 运行日志
-    func readFreeRDPLog() -> String {
-        (try? String(contentsOf: freerdpLogURL, encoding: .utf8)) ?? ""
-    }
-
     // MARK: - 构建脚本
 
-    private func buildRunnerScript(for s: Server) -> String {
+    private func buildRunnerScript(for s: Server, runnerPath: String, envPath: String) -> String {
+        // 窗口模式参数（只支持 smart/fixed；旧 fullscreen/both 配置自动按 smart 处理）：
+        //   smart：+dynamic-resolution 窗口调整时远程分辨率自适应（清晰，非拉伸缩放）
+        //     黑窗口闪烁由 SDL 固有双窗口导致、与参数无关，已在 connect 中用 hide 轮询消除
+        //     想要真全屏：连接后手动点 sdl-freerdp 窗口的绿色全屏按钮（效果稳定）
+        //   fixed：无额外参数，固定 /size
         var opts = ""
         switch s.windowMode {
-        case "smart": opts = "+dynamic-resolution"
-        case "fullscreen": opts = "/f +dynamic-resolution"
-        case "both": opts = "/f +dynamic-resolution"
-        default: opts = ""
+        case "fixed": opts = ""
+        default: opts = "+dynamic-resolution"  // smart 及旧 fullscreen/both
         }
 
-        // 证书：trust-on-first-use，首次连接记录指纹
         let certArg: String
         if let fp = s.trustedFingerprint, !fp.isEmpty {
             certArg = "/cert:tofu:fingerprint:\(fp)"
@@ -225,16 +302,14 @@ final class ConnectionManager {
             certArg = "/cert:tofu"
         }
 
-        // ⌃⌘ 交换：在 RDP 协议层重映射扫描码，仅影响远程桌面，不影响 macOS 系统
         let kbdArg = s.swapCtrlCmd ? Self.kbdRemapArg : ""
-
-        // 自动适配屏幕：取 Mac 主屏逻辑分辨率作为远程桌面尺寸，避免越界
         let (w, h) = effectiveResolution(for: s)
 
-        // OpenSSL 模块路径：仅内置 FreeRDP 时设置（brew 模式由 brew 自带）
         let opensslLine = isFreeRDPBundled
             ? "export OPENSSL_MODULES=\"\(opensslModulesPath)\""
             : "# OPENSSL_MODULES: brew 模式无需设置"
+
+        let sdlBgLine = "export SDL_MAC_BACKGROUND_APP=1  # 后台运行，FreeRDP 不单独占 Dock 图标"
 
         return """
 #!/bin/bash
@@ -244,10 +319,9 @@ final class ConnectionManager {
 # 分辨率：\(w)x\(h)\(s.autoFitScreen ? "（自动适配屏幕）" : "（固定）")
 # 凭据从 .rdp_env 加载（0o600），加载后立即删除，不出现在本脚本中
 \(opensslLine)
-# SDL 后台模式：阻止 SDL3 Cocoa 驱动将激活策略覆盖为 regular（配合 LSUIElement 使用）
-export SDL_MAC_BACKGROUND_APP=1
-source "\(envFilePath)"
-rm -f "\(envFilePath)"
+\(sdlBgLine)
+source "\(envPath)"
+rm -f "\(envPath)"
 exec "\(freerdpPath)" \\
     /v:\(s.host):\(s.port) \\
     /u:"${RDP_USER}" \\
@@ -265,7 +339,6 @@ exec "\(freerdpPath)" \\
 """
     }
 
-    /// 计算实际连接分辨率：autoFitScreen 时取主屏可见区域逻辑分辨率
     private func effectiveResolution(for s: Server) -> (Int, Int) {
         guard s.autoFitScreen, let screen = NSScreen.main else {
             return (s.width, s.height)
@@ -278,7 +351,6 @@ exec "\(freerdpPath)" \\
 }
 
 extension Server {
-    /// 用于 shell 的安全主机名（仅允许字母数字、点、横线）
     var shellSafeHost: String {
         let allowed = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-")
         return host.unicodeScalars.filter { allowed.contains($0) }.map { Character($0) }.map { String($0) }.joined()
