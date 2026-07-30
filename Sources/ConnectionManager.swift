@@ -38,8 +38,17 @@ final class ConnectionManager {
     var freerdpLogURL: URL { URL(fileURLWithPath: freerdpLogPath) }
     var runnerURL: URL { URL(fileURLWithPath: runnerPath) }
 
-    /// FreeRDP 可执行文件路径（自动检测）
+    /// FreeRDP 可执行文件路径：优先用 .app 内置的，找不到再回退到 brew
     var freerdpPath: String {
+        // 1. 优先查找 .app/Contents/MacOS/ 内置的 sdl-freerdp
+        if let execURL = Bundle.main.executableURL {
+            let bundled = execURL.deletingLastPathComponent()
+                .appendingPathComponent("sdl-freerdp").path
+            if FileManager.default.isExecutableFile(atPath: bundled) {
+                return bundled
+            }
+        }
+        // 2. 回退到 brew 安装的
         let candidates = [
             "/opt/homebrew/bin/sdl-freerdp",   // Apple Silicon
             "/usr/local/bin/sdl-freerdp",       // Intel
@@ -52,8 +61,24 @@ final class ConnectionManager {
         return "/opt/homebrew/bin/sdl-freerdp"
     }
 
+    /// FreeRDP 是否已安装（内置或 brew）
     var freerdpInstalled: Bool {
         FileManager.default.isExecutableFile(atPath: freerdpPath)
+    }
+
+    /// FreeRDP 是否为内置（非 brew）
+    var isFreeRDPBundled: Bool {
+        freerdpPath.contains(Bundle.main.bundlePath)
+    }
+
+    /// OpenSSL 模块目录路径（内置时指向 Frameworks/ossl-modules）
+    var opensslModulesPath: String {
+        URL(fileURLWithPath: freerdpPath)
+            .deletingLastPathComponent()      // MacOS/
+            .deletingLastPathComponent()      // Contents/
+            .appendingPathComponent("Frameworks")
+            .appendingPathComponent("ossl-modules")
+            .path
     }
 
     // MARK: - 连接
@@ -183,7 +208,8 @@ final class ConnectionManager {
 # 服务器：\(s.name) @ \(s.address)
 # ⌃⌘交换：\(s.swapCtrlCmd ? "开（RDP 协议层）" : "关")
 # 分辨率：\(w)x\(h)\(s.autoFitScreen ? "（自动适配屏幕）" : "（固定）")
-exec \(freerdpPath) \\
+export OPENSSL_MODULES="\(opensslModulesPath)"
+exec "\(freerdpPath)" \\
     /v:\(s.host):\(s.port) \\
     /u:"\(s.user)" \\
     /p:"\(s.password)" \\

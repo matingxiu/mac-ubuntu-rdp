@@ -24,13 +24,13 @@ Mac 版 Windows App（前身 Microsoft Remote Desktop）连接 Ubuntu gnome-remo
 
 ## 依赖
 
-只需一个外部依赖：
+**DMG 安装包已内置 FreeRDP 及全部依赖（约 50MB），无需额外安装。**
+
+自行构建时需要 FreeRDP（打包脚本会自动将其及依赖复制进 .app）：
 
 ```bash
 brew install freerdp
 ```
-
-要求 `sdl-freerdp`（FreeRDP 3.x SDL 客户端），默认位于 `/opt/homebrew/bin/sdl-freerdp`。
 
 ## 安装
 
@@ -39,7 +39,8 @@ brew install freerdp
 1. 从 [Releases](../../releases) 下载 `Ubuntu-RDP-x.x.x.dmg`
 2. 打开 DMG，把 **Ubuntu RDP** 拖到 **Applications** 文件夹
 3. 首次打开右键 → 打开（绕过 Gatekeeper）
-4. 确保已安装 FreeRDP（见上方依赖）
+
+> DMG 已内置 FreeRDP，无需额外安装任何依赖。
 
 ### 方式二：自行构建
 
@@ -129,6 +130,7 @@ mac-ubuntu-rdp/
 ├── docs/
 │   └── TECHNICAL.md              # 技术原理
 ├── build.sh                       # 构建脚本
+├── bundle_freerdp.sh              # FreeRDP + 依赖打包脚本
 ├── dmg.sh                         # DMG 打包脚本
 ├── LICENSE
 └── README.md

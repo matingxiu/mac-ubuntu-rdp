@@ -33,6 +33,15 @@ cp "$PROJECT_DIR/Resources/Ubuntu.icns" "$APP_PATH/Contents/Resources/Ubuntu.icn
 
 chmod +x "$APP_PATH/Contents/MacOS/$EXECUTABLE"
 
+# 打包 FreeRDP 及其依赖到 .app/Contents/Frameworks/
+echo ""
+echo "=== 打包 FreeRDP 及依赖 ==="
+if [ -f "$PROJECT_DIR/bundle_freerdp.sh" ]; then
+    bash "$PROJECT_DIR/bundle_freerdp.sh" "$APP_PATH"
+else
+    echo "⚠️  bundle_freerdp.sh 不存在，跳过 FreeRDP 打包"
+fi
+
 # 刷新图标缓存
 touch "$APP_PATH"
 
