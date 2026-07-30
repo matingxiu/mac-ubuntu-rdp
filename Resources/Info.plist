@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleExecutable</key>
+    <string>Ubuntu-RDP</string>
+    <key>CFBundleIconFile</key>
+    <string>Ubuntu</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.mtx.ubuntu-rdp</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Ubuntu RDP</string>
+    <key>CFBundleDisplayName</key>
+    <string>Ubuntu RDP</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>200</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>MIT License</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>用于导入/导出 RDP 服务器配置文件</string>
+</dict>
+</plist>
