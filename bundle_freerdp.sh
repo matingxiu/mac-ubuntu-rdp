@@ -8,19 +8,30 @@ MACOS_DIR="$APP/Contents/MacOS"
 FRAMEWORKS_DIR="$APP/Contents/Frameworks"
 BINARY="sdl-freerdp"
 
-# 查找 brew 安装的 sdl-freerdp
-SOURCE=$(which sdl-freerdp 2>/dev/null || echo "/opt/homebrew/bin/sdl-freerdp")
-if [ ! -f "$SOURCE" ]; then
+# 检查 patched 二进制是否存在（修复 macOS 剪贴板 Mac→Linux 同步问题，FreeRDP issue #13118）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PATCHED_BIN="$SCRIPT_DIR/build/freerdp-patched/sdl-freerdp"
+
+# dylibbundler 无法处理 patched 二进制的 @rpath 引用（会陷入循环依赖），
+# 所以始终用 brew 二进制跑 dylibbundler 收集依赖，再替换为 patched 二进制并修复路径
+BREW_BIN=$(which sdl-freerdp 2>/dev/null || echo "/opt/homebrew/bin/sdl-freerdp")
+if [ ! -f "$BREW_BIN" ]; then
     echo "❌ 未找到 sdl-freerdp，请先 brew install freerdp"
     exit 1
 fi
 
-echo "📦 源二进制: $SOURCE"
+if [ -f "$PATCHED_BIN" ]; then
+    echo "📦 使用 patched 二进制（剪贴板修复）+ brew 二进制收集依赖"
+else
+    echo "⚠️  无 patched 二进制，Mac→Linux 剪贴板同步不可用"
+    echo "   要修复剪贴板，请运行: ./build_freerdp_patched.sh"
+fi
+
 echo "📁 目标: $MACOS_DIR/$BINARY"
 
-# 1. 复制 sdl-freerdp 到 .app/Contents/MacOS/
+# 1. 复制 brew sdl-freerdp 到 .app/Contents/MacOS/（用于 dylibbundler）
 mkdir -p "$MACOS_DIR"
-cp "$SOURCE" "$MACOS_DIR/$BINARY"
+cp "$BREW_BIN" "$MACOS_DIR/$BINARY"
 chmod +x "$MACOS_DIR/$BINARY"
 
 # 2. 用 dylibbundler 收集所有依赖到 Frameworks，修复路径为 @executable_path/../Frameworks/
@@ -33,6 +44,43 @@ dylibbundler \
     -p "@executable_path/../Frameworks/" \
     -of \
     2>&1 | tail -10
+
+# 2a. 如果有 patched 二进制，替换并修复库路径
+if [ -f "$PATCHED_BIN" ]; then
+    echo "🔧 替换为 patched 二进制并修复库路径..."
+    cp "$PATCHED_BIN" "$MACOS_DIR/$BINARY"
+    chmod +x "$MACOS_DIR/$BINARY"
+
+    # 获取 bundled 库的实际文件名（dylibbundler 可能用全版本号命名）
+    FW="@executable_path/../Frameworks"
+    for dep in libfreerdp-client3 libfreerdp3 libwinpr3; do
+        # 查找 Frameworks 中匹配的 dylib
+        DYLIB=$(find "$FRAMEWORKS_DIR" -name "${dep}*.dylib" | head -1)
+        if [ -n "$DYLIB" ]; then
+            DYLIB_NAME=$(basename "$DYLIB")
+            # 修复 @rpath/ 引用为 @executable_path/../Frameworks/
+            install_name_tool -change "@rpath/${dep}.3.dylib" "$FW/$DYLIB_NAME" "$MACOS_DIR/$BINARY" 2>/dev/null
+        fi
+    done
+    # 修复 SDL 库路径
+    for dep in libSDL3_ttf libSDL3; do
+        DYLIB=$(find "$FRAMEWORKS_DIR" -name "${dep}*.dylib" | head -1)
+        if [ -n "$DYLIB" ]; then
+            DYLIB_NAME=$(basename "$DYLIB")
+            # 修复绝对路径引用
+            OLD_REF=$(otool -L "$MACOS_DIR/$BINARY" | grep "${dep}" | awk '{print $1}' | head -1)
+            if [ -n "$OLD_REF" ]; then
+                install_name_tool -change "$OLD_REF" "$FW/$DYLIB_NAME" "$MACOS_DIR/$BINARY" 2>/dev/null
+            fi
+        fi
+    done
+    # 删除所有 rpath 条目，添加 bundle rpath
+    for rpath in $(otool -l "$MACOS_DIR/$BINARY" | grep -A2 LC_RPATH | grep "path " | awk '{print $2}'); do
+        install_name_tool -delete_rpath "$rpath" "$MACOS_DIR/$BINARY" 2>/dev/null
+    done
+    install_name_tool -add_rpath "$FW/" "$MACOS_DIR/$BINARY" 2>/dev/null
+    echo "  ✓ patched 二进制已就位"
+fi
 
 # 2b. 复制 OpenSSL 运行时模块（dlopen 加载，dylibbundler 管不到）
 echo "🔐 复制 OpenSSL 模块..."

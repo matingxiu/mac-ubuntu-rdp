@@ -47,9 +47,13 @@ brew install freerdp
 ```bash
 git clone https://github.com/matingxiu/mac-ubuntu-rdp.git
 cd mac-ubuntu-rdp
-brew install freerdp dylibbundler  # 构建时需要，打包后不需要
+brew install freerdp dylibbundler cmake pkgconf  # 构建依赖
+./build_freerdp_patched.sh   # 编译带剪贴板修复的 FreeRDP（推荐）
 ./build.sh install
 ```
+
+> `build_freerdp_patched.sh` 会下载 FreeRDP 3.30.0 源码、应用剪贴板修复 patch 并编译。
+> 跳过此步仍可构建，但 Mac→Linux 剪贴板同步不可用（FreeRDP issue #13118）。
 
 ## 使用
 
@@ -64,9 +68,9 @@ brew install freerdp dylibbundler  # 构建时需要，打包后不需要
 | 模式 | 说明 |
 |------|------|
 | smart | 可调整大小窗口（默认，支持最大化，画面动态缩放） |
-| fullscreen | 启动即全屏 |
-| both | 全屏 + 可调整大小 |
 | fixed | 固定大小窗口 |
+
+> 想要真全屏：连接后手动点 sdl-freerdp 窗口的绿色全屏按钮（效果稳定）。
 
 ### 快捷键（SDL 窗口内）
 
@@ -142,6 +146,8 @@ mac-ubuntu-rdp/
 │   └── TECHNICAL.md              # 技术原理
 ├── build.sh                       # 构建脚本
 ├── bundle_freerdp.sh              # FreeRDP + 依赖打包脚本
+├── build_freerdp_patched.sh       # 编译带剪贴板修复的 FreeRDP
+├── patches/                       # FreeRDP 源码 patch（剪贴板修复）
 ├── dmg.sh                         # DMG 打包脚本
 ├── LICENSE
 └── README.md

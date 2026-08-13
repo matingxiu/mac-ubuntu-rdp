@@ -1,0 +1,61 @@
+--- /tmp/sdl_clip_orig.cpp	2026-08-03 15:33:57
++++ /tmp/FreeRDP-3.30.0/client/SDL/SDL3/sdl_clip.cpp	2026-08-03 14:59:43
+@@ -595,13 +595,30 @@
+ 	return CHANNEL_RC_OK;
+ }
+ 
++/// On macOS, SDL_HasClipboardData() uses UTI conformance matching
++/// (canReadItemWithDataConformingToTypes:) which can return true for mime types
++/// that SDL_GetClipboardData() (exact match via dataForType:) cannot actually read.
++/// This causes Mac→remote clipboard sync to fail: getCurrentTextMime() picks
++/// "text/plain" (UTI-conformant), but SDL_GetClipboardData("text/plain") returns NULL.
++/// Workaround for SDL3 Cocoa Has/Get mismatch (FreeRDP issue #13118):
++/// validate with an actual read instead of trusting SDL_HasClipboardData alone.
+ [[nodiscard]]
++static bool sdlHasClipboardData(const char* mime)
++{
++	if (!SDL_HasClipboardData(mime))
++		return false;
++	size_t size = 0;
++	auto data = std::shared_ptr<void>(SDL_GetClipboardData(mime, &size), SDL_free);
++	return (data && (size > 0));
++}
++
++[[nodiscard]]
+ static const char* getCurrentTextMime()
+ {
+ 
+ 	for (auto m : s_mime_text())
+ 	{
+-		if (SDL_HasClipboardData(m))
++		if (sdlHasClipboardData(m))
+ 			return m;
+ 	}
+ 	return nullptr;
+@@ -612,7 +629,7 @@
+ {
+ 	for (auto m : s_mime_image())
+ 	{
+-		if (SDL_HasClipboardData(m))
++		if (sdlHasClipboardData(m))
+ 			return m;
+ 	}
+ 	return nullptr;
+@@ -674,7 +691,7 @@
+ 			else if (formatId == htmlFormatId)
+ 			{
+ 				/* In case HTML format was requested but we only have images in local clipboard */
+-				if (!SDL_HasClipboardData(s_mime_html))
++				if (!sdlHasClipboardData(s_mime_html))
+ 				{
+ 					mime = getCurrentImageMime();
+ 					if (mime)
+@@ -689,7 +706,7 @@
+ 			else
+ 			{
+ 				const char* formatName = ClipboardGetFormatName(clipboard->_system, formatId);
+-				if (formatName && SDL_HasClipboardData(formatName))
++				if (formatName && sdlHasClipboardData(formatName))
+ 				{
+ 					localFormatId = ClipboardGetFormatId(clipboard->_system, formatName);
+ 					mime = formatName;
