@@ -62,13 +62,13 @@ if [ -f "$PATCHED_BIN" ]; then
             install_name_tool -change "@rpath/${dep}.3.dylib" "$FW/$DYLIB_NAME" "$MACOS_DIR/$BINARY" 2>/dev/null
         fi
     done
-    # 修复 SDL 库路径
-    for dep in libSDL3_ttf libSDL3; do
-        DYLIB=$(find "$FRAMEWORKS_DIR" -name "${dep}*.dylib" | head -1)
+    # 修复 SDL 库路径（用 grep -F 固定字符串匹配，避免正则误匹配）
+    for dep in "libSDL3_ttf" "libSDL3."; do
+        DYLIB=$(find "$FRAMEWORKS_DIR" -name "${dep}*dylib" | head -1)
         if [ -n "$DYLIB" ]; then
             DYLIB_NAME=$(basename "$DYLIB")
-            # 修复绝对路径引用
-            OLD_REF=$(otool -L "$MACOS_DIR/$BINARY" | grep "${dep}" | awk '{print $1}' | head -1)
+            # 修复绝对路径引用（grep -F 避免正则匹配多条记录）
+            OLD_REF=$(otool -L "$MACOS_DIR/$BINARY" | grep -F "${dep}" | awk '{print $1}' | head -1)
             if [ -n "$OLD_REF" ]; then
                 install_name_tool -change "$OLD_REF" "$FW/$DYLIB_NAME" "$MACOS_DIR/$BINARY" 2>/dev/null
             fi
